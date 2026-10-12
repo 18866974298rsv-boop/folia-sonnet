@@ -5,23 +5,24 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Set up Node 24
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '24'
           cache: npm
@@ -35,6 +36,11 @@ jobs:
           VITE_NETEASE_API_BASE=https://folia-netease-api.vercel.app
           EOF
 
+      - name: Ensure Android SDK platform 36
+        run: |
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" || true
+
       - name: Build web (capacitor target) and sync android
         run: npm run cap:sync:android
 
@@ -42,10 +48,10 @@ jobs:
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleDebug --stacktrace 2>&1 | tee gradle-build.log
 
       - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: folia-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
@@ -56,3 +62,12 @@ jobs:
         run: |
           gh release create folia-apk --title "Folia Android APK" --notes "Debug APK（GitHub Actions 自动构建）" android/app/build/outputs/apk/debug/app-debug.apk || \
           gh release upload folia-apk android/app/build/outputs/apk/debug/app-debug.apk --clobber
+
+      - name: Publish failure log (only when the build fails)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp android/gradle-build.log ./gradle-build.log 2>/dev/null || true
+          gh release delete folia-apk-log --yes 2>/dev/null || true
+          gh release create folia-apk-log --title "APK build failure log" ./gradle-build.log || true
